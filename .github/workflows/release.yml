@@ -27,31 +27,55 @@ jobs:
           distribution: temurin
           cache: maven
           server-id: github
-          settings-path: ${{ github.workspace }}
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+          overwrite-settings: true
 
       - name: Extract project version from pom.xml
         id: version
         run: |
-          VERSION=$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)
+          set -euo pipefail
+          VERSION=$(grep -oPm1 '(?<=<version>)[^<]+' pom.xml | head -n1)
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: Failed to parse version from pom.xml" >&2
+            exit 1
+          fi
+          TAG_NAME=${GITHUB_REF#refs/tags/}
           echo "project_version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "tag_name=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "Project version: ${VERSION}"
-          echo "Tag name: ${GITHUB_REF#refs/tags/}"
+          echo "Tag name: ${TAG_NAME}"
+          echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}"
+          echo "GITHUB_ACTOR: ${GITHUB_ACTOR}"
 
       - name: Build with Maven
         run: |
+          set -euo pipefail
           mvn -B clean package \
-            -DskipTests=false \
+            -DskipTests \
             -Dmaven.javadoc.skip=false \
-            -Dsource.skip=false
+            -Dmaven.source.skip=false \
+            -Dorg.slf4j.simpleLogger.defaultLogLevel=info
 
       - name: Verify build artifacts
         run: |
-          echo "Listing target/*.jar:"
-          ls -lh target/*.jar || echo "No jar files found"
+          set -euo pipefail
+          PROJECT_VERSION=${{ steps.version.outputs.project_version }}
+          echo "=== target/ directory contents ==="
+          ls -lh target/
           echo ""
-          echo "Maven dependency tree:"
-          mvn -B dependency:tree | grep -E "(mysql|slf4j|firewall)"
+          echo "=== Checking required artifacts ==="
+          for f in \
+            "target/firewall-jdbc-${PROJECT_VERSION}.jar" \
+            "target/firewall-jdbc-${PROJECT_VERSION}-sources.jar" \
+            "target/firewall-jdbc-${PROJECT_VERSION}-javadoc.jar"; do
+            if [ -f "$f" ]; then
+              echo "✓ FOUND: $f ($(stat -c%s "$f" 2>/dev/null || echo "size?") bytes)"
+            else
+              echo "✗ MISSING: $f" >&2
+              exit 1
+            fi
+          done
 
       - name: Create GitHub Release
         id: create_release
@@ -61,6 +85,7 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, '-') }}
+          fail_on_unmatched_files: true
           files: |
             target/firewall-jdbc-${{ steps.version.outputs.project_version }}.jar
             target/firewall-jdbc-${{ steps.version.outputs.project_version }}-sources.jar
@@ -71,9 +96,14 @@ jobs:
 
       - name: Publish to GitHub Packages
         run: |
+          set -euo pipefail
+          DEPLOY_URL="https://maven.pkg.github.com/${GITHUB_REPOSITORY}"
+          echo "Deploying to ${DEPLOY_URL}"
           mvn -B deploy \
             -DskipTests \
-            -Dmaven.deploy.skip=false \
-            -s $GITHUB_WORKSPACE/settings.xml
+            -Dmaven.source.skip=true \
+            -Dmaven.javadoc.skip=true \
+            -DaltDeploymentRepository="github::default::${DEPLOY_URL}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}

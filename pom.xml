@@ -6,7 +6,7 @@
 
     <groupId>com.firewall</groupId>
     <artifactId>firewall-jdbc</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <packaging>jar</packaging>
 
     <name>firewall-jdbc</name>
