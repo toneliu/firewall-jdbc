@@ -37,6 +37,21 @@ public class FirewallDriver extends Driver {
      */
     public static final String ATTR_USER_KEY = "firewall_user";
 
+    /**
+     * 显式声明无参构造器并传播 SQLException
+     * <p>
+     * 父类 {@link com.mysql.cj.jdbc.Driver#Driver()} 的构造器声明了
+     * {@link SQLException}（用于处理 DriverManager 注册时的异常）。
+     * 如果子类不显式声明带 throws 的构造器，Java 编译器会生成默认构造器，
+     * 而默认构造器不允许传播父类构造器抛出的检查型异常，从而编译失败。
+     * </p>
+     *
+     * @throws SQLException 父类构造器注册驱动失败时抛出
+     */
+    public FirewallDriver() throws SQLException {
+        super();
+    }
+
     @Override
     public Connection connect(String url, Properties info) throws SQLException {
         if (!acceptsURL(url)) {
