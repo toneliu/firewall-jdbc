@@ -1,0 +1,47 @@
+name: CI Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        java-version: [8, 11, 17]
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build with Maven
+        run: mvn -B clean package -DskipTests=false
+
+      - name: Run Tests
+        run: mvn -B test
+
+      - name: Upload build artifacts
+        if: matrix.java-version == '17'
+        uses: actions/upload-artifact@v4
+        with:
+          name: firewall-jdbc-snapshot
+          path: target/*.jar
+          retention-days: 7
