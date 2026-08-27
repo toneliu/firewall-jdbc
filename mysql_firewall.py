@@ -278,7 +278,7 @@ class FirewallProxy:
 
 # --------------- 启动 ---------------
 
-def main():
+async def main():
     logger.info(f'{C_GREEN}MySQL 防火墙代理启动{C_RESET}')
     logger.info(f'  监听:   {LISTEN_HOST}:{LISTEN_PORT}')
     logger.info(f'  MySQL:  {MYSQL_HOST}:{MYSQL_PORT}')
@@ -290,16 +290,18 @@ def main():
     logger.info(f'')
 
     proxy = FirewallProxy()
-    asyncio.run(asyncio.start_server(
+    server = await asyncio.start_server(
         proxy.handle_client,
         LISTEN_HOST,
         LISTEN_PORT,
-    ).serve_forever())
+    )
+    async with server:
+        await server.serve_forever()
 
 
 if __name__ == '__main__':
     try:
-        main()
+        asyncio.run(main())
     except KeyboardInterrupt:
         print('\n防火墙已停止')
         sys.exit(0)
