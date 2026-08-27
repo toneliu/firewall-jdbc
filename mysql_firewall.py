@@ -16,6 +16,7 @@
 """
 
 import asyncio
+import re
 import struct
 import logging
 import sys
@@ -242,20 +243,34 @@ class FirewallProxy:
                     sql = packet[5:].decode('utf-8', errors='replace')
                     current_user = session['firewall_user']
 
+                    # 调试：打印 SQL 的前 60 字节的 hex 和原文，方便排查 Connector/J 是否加注释
+                    if 'firewall_user' in sql.lower():
+                        logger.info(
+                            f'{C_YELLOW}[#{conn_id}] DEBUG SQL hex:{C_RESET} '
+                            f'{sql[:60].encode("utf-8").hex()}'
+                        )
+                        logger.info(
+                            f'{C_YELLOW}[#{conn_id}] DEBUG SQL raw:{C_RESET} '
+                            f'{repr(sql[:60])}'
+                        )
+
                     # 检测 SET @firewall_user = 'xxx' 语句
-                    sql_stripped = sql.strip().upper()
-                    if sql_stripped.startswith('SET @FIREWALL_USER'):
-                        # 提取引号内的值
-                        import re
-                        m = re.search(r"SET\s+@firewall_user\s*=\s*'([^']*)'", sql, re.IGNORECASE)
-                        if m:
-                            old_user = session['firewall_user']
-                            session['firewall_user'] = m.group(1)
+                    # 使用宽松匹配：Connector/J 8.x 可能在 SQL 前加注释，或使用 @@session. 前缀
+                    m = re.search(
+                        r"@+firewall_user\s*=\s*'([^']*)'",
+                        sql,
+                        re.IGNORECASE,
+                    )
+                    if m and re.search(r"\bSET\b", sql, re.IGNORECASE):
+                        new_user = m.group(1)
+                        old_user = session['firewall_user']
+                        if old_user != new_user:
                             logger.info(
                                 f'{C_GREEN}[#{conn_id}] 身份切换:{C_RESET} '
                                 f'{C_YELLOW}{old_user}{C_RESET} → '
-                                f'{C_CYAN}{session["firewall_user"]}{C_RESET}'
+                                f'{C_CYAN}{new_user}{C_RESET}'
                             )
+                        session['firewall_user'] = new_user
                         # 转发 SET 语句到 MySQL
                         mysql_dst.write(packet)
                         await mysql_dst.drain()
