@@ -226,8 +226,12 @@ class FirewallProxy:
                     pass
             logger.info(f'{C_YELLOW}[#{conn_id}] 连接关闭 (firewall_user={firewall_user}){C_RESET}')
 
-    async def _forward_client(self, src, mysql_dst, client_dst, conn_id, firewall_user):
-        """客户端 → MySQL，审计 SQL"""
+    async def _forward_client(self, src, mysql_dst, client_dst, conn_id, initial_user):
+        """客户端 → MySQL，审计 SQL，跟踪 session 变量"""
+        # 使用可变容器跟踪当前连接的用户身份
+        # 初始值来自连接属性，后续可通过 SET @firewall_user 更新
+        session = {'firewall_user': initial_user}
+
         try:
             while True:
                 packet = await read_mysql_packet(src)
@@ -236,19 +240,40 @@ class FirewallProxy:
                 # COM_QUERY = 0x03
                 if len(packet) > 4 and packet[4] == 0x03:
                     sql = packet[5:].decode('utf-8', errors='replace')
-                    allowed, reason = check_acl(firewall_user, sql)
+                    current_user = session['firewall_user']
+
+                    # 检测 SET @firewall_user = 'xxx' 语句
+                    sql_stripped = sql.strip().upper()
+                    if sql_stripped.startswith('SET @FIREWALL_USER'):
+                        # 提取引号内的值
+                        import re
+                        m = re.search(r"SET\s+@firewall_user\s*=\s*'([^']*)'", sql, re.IGNORECASE)
+                        if m:
+                            old_user = session['firewall_user']
+                            session['firewall_user'] = m.group(1)
+                            logger.info(
+                                f'{C_GREEN}[#{conn_id}] 身份切换:{C_RESET} '
+                                f'{C_YELLOW}{old_user}{C_RESET} → '
+                                f'{C_CYAN}{session["firewall_user"]}{C_RESET}'
+                            )
+                        # 转发 SET 语句到 MySQL
+                        mysql_dst.write(packet)
+                        await mysql_dst.drain()
+                        continue
+
+                    allowed, reason = check_acl(current_user, sql)
 
                     if allowed:
                         if LOG_SQL:
                             logger.info(
                                 f'{C_CYAN}[#{conn_id}]{C_RESET} '
-                                f'QUERY [user={firewall_user}]: {sql[:200]}'
+                                f'QUERY [user={current_user}]: {sql[:200]}'
                             )
                         mysql_dst.write(packet)
                         await mysql_dst.drain()
                     else:
                         logger.warning(
-                            f'{C_RED}[#{conn_id}] BLOCKED [user={firewall_user}] '
+                            f'{C_RED}[#{conn_id}] BLOCKED [user={current_user}] '
                             f'{reason}: {sql[:200]}{C_RESET}'
                         )
                         # 发送错误包给客户端，不转发给 MySQL
